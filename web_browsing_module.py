@@ -3,22 +3,11 @@ from bs4 import BeautifulSoup
 import threading
 from queue import Queue
 import os
+from knowledge_graph_updater import KnowledgeGraphUpdater
+import sys
+import response_generator
 
-def run_main_exe(bin_path, model, prompt, queue):
-    queue.put(prompt)
-    command = [
-        bin_path + "/main.exe",
-        # (Remaining command arguments)
-        "-m", bin_path + "/" + model
-    ]
-
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = process.communicate()
-
-    if process.returncode != 0:
-        print(f"An error occurred: {stderr.decode()}")
-    else:
-        return stdout.decode()
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
 def browse_web(chatbot):
     current_url = ""
@@ -32,18 +21,18 @@ def browse_web(chatbot):
 
     while True:
         decision_prompt = "Choose an action for web browsing:\n0. Read unsummarized\n1. Summarize page\n2. Follow hyperlink\n3. Enter URL\n4. Last page (if applicable)\n5. Next page (if applicable)\n6. Exit browsing session"
-        chatbot_decision = run_main_exe(bin_path, model_13b, decision_prompt, queue_13b)
+        chatbot_decision = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
 
         choice, *args = chatbot_decision.split()
 
         if choice == '0':
             print(content_chunks[current_page])
         elif choice == '1':
-            summary = run_main_exe(bin_path, model_7b, content_chunks[current_page], queue_7b)
+            summary = response_generator.get_response(os.path.join(script_dir, model_7b), prompt)
             print(f"Summary of the page:\n{summary}")
         elif choice == '2':
             hyperlink_prompt = "Enter the hyperlink:"
-            hyperlink = run_main_exe(bin_path, model_13b, hyperlink_prompt, queue_13b).strip()
+            hyperlink = response_generator.get_response(os.path.join(script_dir, model_13b), prompt).strip()
             current_url = hyperlink
             page_content = fetch_page_content(current_url)
             content_chunks = split_content_into_chunks(page_content, token_limit)
@@ -51,7 +40,7 @@ def browse_web(chatbot):
             browsing_history.append(current_url)
         elif choice == '3':
             url_prompt = "Enter the URL:"
-            url = run_main_exe(bin_path, model_13b, url_prompt, queue_13b).strip()
+            url = response_generator.get_response(os.path.join(script_dir, model_13b), prompt).strip()
             current_url = url
             page_content = fetch_page_content(current_url)
             content_chunks = split_content_into_chunks(page_content, token_limit)
@@ -87,7 +76,7 @@ def split_content_into_chunks(content, token_limit):
 
 if __name__ == "__main__":
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    bin_path = "."
+    bin_path = os.path.dirname(os.path.abspath(__file__))
     model_13b = "ggml-vicuna-13b-1.1-q4_1.bin"
     model_7b = "ggml-vicuna-7b-1.1-q4_0.bin"
     queue_13b = Queue()

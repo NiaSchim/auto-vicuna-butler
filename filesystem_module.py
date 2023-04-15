@@ -1,22 +1,12 @@
 import os
 import threading
 from queue import Queue
+from knowledge_graph_updater import KnowledgeGraphUpdater
+import sys
+import response_generator
 
-def run_main_exe(bin_path, model, prompt, queue):
-    queue.put(prompt)
-    command = [
-        bin_path + "/main.exe",
-        # (Remaining command arguments)
-        "-m", bin_path + "/" + model
-    ]
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = process.communicate()
-
-    if process.returncode != 0:
-        print(f"An error occurred: {stderr.decode()}")
-    else:
-        return stdout.decode()
 
 def create_file(filename):
     with open(filename, 'w') as file:
@@ -50,8 +40,23 @@ def list_files_and_folders():
     for item in os.listdir():
         print(item)
 
-def navigate_to_directory():
+def create_new_folder():
+    folder_name = input("Enter the name of the new folder: ")
+    try:
+        os.makedirs(folder_name)
+        print(f"Folder '{folder_name}' created successfully.")
+    except FileExistsError:
+        print(f"Folder '{folder_name}' already exists.")
+    except Exception as e:
+        print(f"Error creating folder '{folder_name}': {e}")
+
+def navigate_to_directory(auto_vicuna_playground_path):
     new_directory = input("Enter the path of the directory to navigate to: ")
+    new_directory = os.path.abspath(new_directory)
+    if not new_directory.startswith(auto_vicuna_playground_path):
+        print(f"Navigation to '{new_directory}' is not allowed. Please stay within the '{auto_vicuna_playground_path}' directory.")
+        return
+
     if os.path.exists(new_directory) and os.path.isdir(new_directory):
         os.chdir(new_directory)
         print(f"Successfully navigated to '{new_directory}'.")
@@ -84,63 +89,60 @@ def auto_vicuna_workflow(bin_path, model_13b):
             file.writelines([f"{goal}\n" for goal in goals])
 
     prompt = f"Given my purpose ('{purpose}'), my 3 goals ({', '.join(goals)}), my short-term memory, and my long-term memory, what goal should I work on next and how?"
-    response = run_main_exe(prompt, bin_path, model_13b, queue_13b)
+    response = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
     print(response)
-    knowledge_graph_updater = KnowledgeGraphUpdater()
+    knowledge_graph_updater = KnowledgeGraphUpdater(bin_path, model_13b, model_7b)
 
     while True:
         # Summarize knowledge graphs, goals, and purpose using the 7b model
         summary_prompt = f"Summarize the following knowledge graphs, goals, and purpose:\n\nKnowledge Graphs:\n{knowledge_graph_updater}\nGoals:\n{', '.join(goals)}\nPurpose:\n{purpose}\n"
-        summary = run_main_exe(bin_path, model_7b, summary_prompt, queue_7b)
-        interim = run_main_exe(bin_path, model_13b, summary, queue_13b)
-        decision_prompt = "Choose an action for file system operations:\n1. Create a file\n2. Read a file\n3. Update a file\n4. Delete a file\n5. List files and folders\n6. Navigate to a directory\n7. Nevermind"
-        chatbot_decision = run_main_exe(bin_path, model_13b, decision_prompt, queue_13b)
+        summary = response_generator.get_response(os.path.join(script_dir, model_7b), prompt)
+        interim = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
+        decision_prompt = "Choose an action for file system operations:\n1. Create a file\n2. Read a file\n3. Update a file\n4. Delete a file\n5. List files and folders\n6. Navigate to a directory\n7. Create new folder\n8. Nevermind"
+        chatbot_decision = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
 
         choice, *args = chatbot_decision.split()
 
         if choice == '1':
             filename_prompt = "Enter the filename:"
-            filename = run_main_exe(bin_path, model_13b, filename_prompt, queue_13b)
-            content_prompt = "Write the file in the proper file format:"
-            content = run_main_exe(bin_path, model_13b, content_prompt, queue_13b)
-            create_file(filename.strip(), content.strip())
-            break
+            filename = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
+            create_file(filename.strip())
         elif choice == '2':
             filename_prompt = "Enter the filename:"
-            filename = run_main_exe(bin_path, model_13b, filename_prompt, queue_13b)
+            filename = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
             read_file(filename.strip())
-            break
         elif choice == '3':
             filename_prompt = "Enter the filename:"
-            filename = run_main_exe(bin_path, model_13b, filename_prompt, queue_13b)
+            filename = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
             content_prompt = "Enter the content to update the file:"
-            content = run_main_exe(bin_path, model_13b, content_prompt, queue_13b)
+            content = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
             update_file(filename.strip(), content.strip())
-            break
         elif choice == '4':
             filename_prompt = "Enter the filename:"
-            filename = run_main_exe(bin_path, model_13b, filename_prompt, queue_13b)
+            filename = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
             delete_file(filename.strip())
-            break
         elif choice == '5':
             list_files_and_folders()
-            break
         elif choice == '6':
             new_directory_prompt = "Enter the new directory path:"
-            new_directory = run_main_exe(bin_path, model_13b, new_directory_prompt, queue_13b)
+            new_directory = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
             navigate_to_directory(new_directory.strip())
-            break
         elif choice == '7':
+            create_new_folder()
+        elif choice == '8':
+            print("Exiting the file system operations.")
             break
         else:
             print("Invalid choice. Please try again.")
 
 if __name__ == "__main__":
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    bin_path = "."
+    bin_path = os.path.dirname(os.path.abspath(__file__))
     model_13b = "ggml-vicuna-13b-1.1-q4_1.bin"
     model_7b = "ggml-vicuna-7b-1.1-q4_0.bin"
-    working_directory = browse_folder()
-    os.chdir(working_directory)
+
+    auto_vicuna_playground = "AutoVicunaPlayground"
+    auto_vicuna_playground_path = os.path.abspath(auto_vicuna_playground)
+    os.makedirs(auto_vicuna_playground_path, exist_ok=True)
+    os.chdir(auto_vicuna_playground_path)
 
     auto_vicuna_workflow(bin_path, model_13b, model_7b)
