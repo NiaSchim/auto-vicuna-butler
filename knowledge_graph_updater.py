@@ -5,6 +5,7 @@ from xml.etree import ElementTree as ET
 import sys
 import response_generator
 
+
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 class KnowledgeGraphUpdater:

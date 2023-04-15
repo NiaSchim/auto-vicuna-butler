@@ -19,6 +19,7 @@ import sys
 from llama_cpp import Llama  # Import Llama class
 import response_generator
 
+
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -89,29 +90,16 @@ def browse_folder():
     return folder_path
 
 if __name__ == "__main__":
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
     model_path = os.path.dirname(os.path.abspath(__file__))
     model_13b_path = "ggml-vicuna-13b-1.1-q4_1.bin"
     model_7b_path = "ggml-vicuna-7b-1.1-q4_0.bin"
 
-    # Create Llama instances for 13b and 7b models
-    model_13b_instance = Llama(model_path=os.path.join(model_path, model_13b_path))
-    model_7b_instance = Llama(model_path=os.path.join(model_path, model_7b_path))
-
-    # Create queues for passing prompts to the 13b and 7b model instances
-    queue_13b = Queue()
-    queue_7b = Queue()
-
-    # Start the continuous processes
-    model_13b_thread = threading.Thread(target=continuous_model_runner, args=(model_13b_instance, queue_13b))
-    model_7b_thread = threading.Thread(target=continuous_model_runner, args=(model_7b_instance, queue_7b))
-    model_13b_thread.start()
-    model_7b_thread.start()
+    # Get Llama instances for 13b and 7b models
+    model_13b_instance, queue_13b = get_response(os.path.join(model_path, model_13b_path))
+    model_7b_instance, queue_7b = get_response(os.path.join(model_path, model_7b_path))
 
     auto_vicuna_workflow(model_13b_instance, model_7b_instance, queue_13b, queue_7b)
 
-    # Exit the continuous processes
+    # Terminate the processes
     queue_13b.put("EXIT")
     queue_7b.put("EXIT")
-    model_13b_thread.join()
-    model_7b_thread.join()

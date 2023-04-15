@@ -5,6 +5,7 @@ from knowledge_graph_updater import KnowledgeGraphUpdater
 import sys
 import response_generator
 
+
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 
