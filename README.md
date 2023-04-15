@@ -1,4 +1,2 @@
 # auto-vicuna-butler
-a hacked and Frankensteined version of baby-agi ( https://github.com/yoheinakajima/babyagi ), modified to run entirely offline through the use of vicuna.
-
-(also it comes with a version of itself, inside of itself, like a nesting doll, no clue why I did that! ...I guess I want the butler to have access to its own code...
+It was planned to be a hacked and Frankensteined version of baby-agi ( https://github.com/yoheinakajima/babyagi ), modified to run entirely offline through the use of vicuna. But I think we're going a different route, black-box cloning auto-gpt, into Vicuna-GPT with the help of Llama.cpp. did you follow all of that?
