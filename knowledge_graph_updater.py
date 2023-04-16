@@ -16,6 +16,10 @@ def count_common_words(page, common_words):
 
 def should_skip_page(page, common_words, threshold=0.05):
     total_word_count = len(page.split())
+
+    if total_word_count == 0:
+        return True
+
     common_word_count = count_common_words(page, common_words)
 
     frequency = common_word_count / total_word_count
@@ -30,6 +34,21 @@ def get_most_common_words(text, n=10):
         else:
             word_count[word] = 1
     return sorted(word_count, key=word_count.get, reverse=True)[:n]
+
+def get_common_words(text, n=10):
+    word_count = {}
+    for word in text.split():
+        word = word.lower()
+        if word in word_count:
+            word_count[word] += 1
+        else:
+            word_count[word] = 1
+    if not word_count:
+        return []
+    else:
+        average_count = sum(word_count.values()) / len(word_count)
+        common_words = [word for word, count in word_count.items() if count >= average_count]
+        return sorted(common_words, key=word_count.get, reverse=True)[:n]
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 class KnowledgeGraphUpdater:
@@ -98,6 +117,10 @@ class KnowledgeGraphUpdater:
 
         shortterm_graph_path = "shortterm.txt"
         longterm_graph_path = "longterm.txt"
+
+        # Get common words
+        text = activities + insights + general_learnings
+        common_words = get_common_words(text)
 
         with open(shortterm_graph_path, "a") as file:
             for activity in activities:
