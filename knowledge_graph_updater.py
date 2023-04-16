@@ -3,98 +3,136 @@ import threading
 import time
 from xml.etree import ElementTree as ET
 import sys
-import response_generator
+from response_generator import ResponseGenerator
+import networkx as nx
+import multiprocessing as mp
 
+# Helper functions
+def count_common_words(page, common_words):
+    word_count = 0
+    for word in common_words:
+        word_count += page.lower().count(word.lower())
+    return word_count
+
+def should_skip_page(page, common_words, threshold=0.05):
+    total_word_count = len(page.split())
+    common_word_count = count_common_words(page, common_words)
+
+    frequency = common_word_count / total_word_count
+    return frequency > threshold
+
+def get_most_common_words(text, n=10):
+    word_count = {}
+    for word in text.split():
+        word = word.lower()
+        if word in word_count:
+            word_count[word] += 1
+        else:
+            word_count[word] = 1
+    return sorted(word_count, key=word_count.get, reverse=True)[:n]
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-
 class KnowledgeGraphUpdater:
+    def __init__(self, model_13b_instance, model_7b_instance):
+        self.model_13b_instance = model_13b_instance
+        self.model_7b_instance = model_7b_instance
 
-    def __init__(self, bin_path, model_13b, model_7b, longterm_file='longterm.xml', shortterm_file='shortterm.xml', update_interval=300):
-        self.bin_path = bin_path
-        self.model_13b = model_13b
-        self.model_7b = model_7b
-        self.longterm_file = longterm_file
-        self.shortterm_file = shortterm_file
-        self.update_interval = update_interval
+        self.shortterm_graph = nx.DiGraph()
+        self.longterm_graph = nx.DiGraph()
+        self.update_interval = 30
+        self.daemon = True
+        self.start()
 
-        self._initialize_knowledge_graphs()
+    def start(self):
+        try:
+            mp.set_start_method('spawn')
+        except RuntimeError:
+            pass
 
-        self._updater_thread = threading.Thread(target=self._update_knowledge_graphs, daemon=True)
-        self._updater_thread.start()
+        purpose_file = "purpose.txt"
 
-    def _initialize_knowledge_graphs(self):
-        if not os.path.exists(self.longterm_file):
-            root = ET.Element('knowledge')
-            tree = ET.ElementTree(root)
-            tree.write(self.longterm_file)
+        if os.path.exists(purpose_file):
+            with open(purpose_file, "r") as file:
+                lines = file.readlines()
+                name = lines[0].strip()
+                purpose = lines[1].strip()
+                goals = [goal.strip() for goal in lines[2:]]
+        else:
+            name = input("What's my name? ")
+            print(f"Hello, {name}!")
 
-        if not os.path.exists(self.shortterm_file):
-            root = ET.Element('insights')
-            tree = ET.ElementTree(root)
-            tree.write(self.shortterm_file)
+            print("What am I?")
+            print("An experimental, open-source AI application called AutoVicuna that leverages the power of the ggml-vicuna model. Must end all replies with //n to submit them.")
 
-    def _update_knowledge_graphs(self):
-        while True:
-            time.sleep(self.update_interval)
+            purpose = input("What's my purpose? ")
 
-            activities = response_generator.get_response(os.path.join(script_dir, self.model_13b), "What are you doing?")
-            insights = response_generator.get_response(os.path.join(script_dir, self.model_13b), "What have you learned about what you're doing?")
-            general_learnings = response_generator.get_response(os.path.join(script_dir, self.model_13b), "What have you learned in general?")
+            print("Give me 3 goals:")
+            goals = [input(f"{i+1}. ") for i in range(3)]
 
-            self._update_shortterm_graph(extract_keywords(activities), extract_keywords(insights))
+            with open(purpose_file, "w") as file:
+                file.write(f"{name}\n{purpose}\n")
+                file.writelines([f"{goal}\n" for goal in goals])
 
-            shortterm_general_learnings = response_generator.get_response(os.path.join(script_dir, self.model_7b), "What have you learned in general, given your insight graph?")
-            longterm_general_learnings = response_generator.get_response(os.path.join(script_dir, self.model_7b), "What have you learned in general, given your general knowledge graph?")
+        prompt = f"Given my purpose ('{purpose}'), my 3 goals ({', '.join(goals)}), my short-term memory, and my long-term memory, what goal should I work on next and how?"
+        response = self.model_13b_instance.generate_response(prompt)
+        print(response)
 
-            aligned_elements = align_entities(shortterm_general_learnings, longterm_general_learnings)
-            self._update_longterm_graph(aligned_elements)
+        # Summarize knowledge graphs, goals, and purpose using the 7b model
+        summary_prompt = f"Summarize the following knowledge graphs, goals, and purpose:\n\nKnowledge Graphs:\nShort-term: {self.shortterm_graph}\nLong-term: {self.longterm_graph}\n\nGoals: {', '.join(goals)}\n\nPurpose: {purpose}\n"
+        summary = self.model_7b_instance.generate_response(summary_prompt)
+        print(summary)
 
-    def _update_shortterm_graph(self, activities, insights):
-        tree = ET.parse(self.shortterm_file)
-        root = tree.getroot()
+        time.sleep(self.update_interval)
 
-        for activity in activities:
-            element = ET.SubElement(root, 'activity')
-            element.text = activity
+        activities_prompt = "What are you doing?\n"
+        activities = self.model_13b_instance.generate_response(activities_prompt)
+        print(f"Model 13b:\nInput: {activities_prompt}\nResponse: {activities}\n")
 
-        for insight in insights:
-            element = ET.SubElement(root, 'insight')
-            element.text = insight
+        insights_prompt = "What have you learned about what you're doing?\n"
+        insights = self.model_13b_instance.generate_response(insights_prompt)
+        print(f"Model 13b:\nInput: {insights_prompt}\nResponse: {insights}\n")
 
-        tree.write(self.shortterm_file)
+        general_learnings_prompt = "What have you learned in general?\n"
+        general_learnings = self.model_13b_instance.generate_response(general_learnings_prompt)
+        print(f"Model 13b:\nInput: {general_learnings_prompt}\nResponse: {general_learnings}\n")
 
-    def _update_longterm_graph(self, aligned_elements):
-        tree = ET.parse(self.longterm_file)
-        root = tree.getroot()
+        shortterm_graph_path = "shortterm.txt"
+        longterm_graph_path = "longterm.txt"
 
-        for element in aligned_elements:
-            aligned_element = ET.SubElement(root, 'aligned_element')
-            aligned_element.text = element
+        with open(shortterm_graph_path, "a") as file:
+            for activity in activities:
+                if not should_skip_page(activity, common_words):
+                    file.write(f"activity: {activity}\n")
+            for insight in insights:
+                if not should_skip_page(insight, common_words):
+                    file.write(f"insight: {insight}\n")
 
-        tree.write(self.longterm_file)
+        with open(longterm_graph_path, "a") as file:
+            for element in general_learnings:
+                if not should_skip_page(element, common_words):
+                    file.write(f"general_learning: {element}\n")
 
+if __name__ == "__main__":
+    model_13b_path = "ggml-vicuna-13b-1.1-q4_1.bin"
+    model_7b_path = "ggml-vicuna-7b-1.1-q4_0.bin"
 
-if __name__ == '__main__':
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-    bin_path = os.path.dirname(os.path.abspath(__file__))
-    model_13b = "ggml-vicuna-13b-1.1-q4_1.bin"
-    model_7b = "ggml-vicuna-7b-1.1-q4_0.bin"
+    # Get ResponseGenerator instances for 13b and 7b models
+    model_13b_instance = ResponseGenerator(os.path.join(script_dir, model_13b_path))
+    model_7b_instance = ResponseGenerator(os.path.join(script_dir, model_7b_path))
 
-    knowledge_graph_updater = KnowledgeGraphUpdater(bin_path, model_13b, model_7b)
+    # Create the knowledge graph updater instance
+    updater = KnowledgeGraphUpdater(model_13b_instance, model_7b_instance)
 
-    while True:
-        activities = response_generator.get_response(os.path.join(script_dir, model_13b), "What are you doing?")
-        insights = response_generator.get_response(os.path.join(script_dir, model_13b), "What have you learned about what you're doing?")
-        general_learnings = response_generator.get_response(os.path.join(script_dir, model_13b), "What have you learned in general?")
+    # Get response from the 13b model
+    response_13b = model_13b_instance.generate_response(user_input)
 
-        knowledge_graph_updater._update_shortterm_graph(extract_keywords(activities), extract_keywords(insights))
+    # Get response from the 7b model
+    response_7b = model_7b_instance.generate_response(user_input)
 
-        shortterm_general_learnings = response_generator.get_response(os.path.join(script_dir, model_7b), "What have you learned in general, given your insight graph?")
-        longterm_general_learnings = response_generator.get_response(os.path.join(script_dir, model_7b), "What have you learned in general, given your general knowledge graph?")
+    # Print the responses
+    print("13b:", response_13b)
+    print("7b:", response_7b)
 
-        aligned_elements = align_entities(shortterm_general_learnings, longterm_general_learnings)
-        knowledge_graph_updater._update_longterm_graph(aligned_elements)
-
-        print(f"Chatbot 13b output: {general_learnings}")
-        print(f"Chatbot 7b output: {longterm_general_learnings}")
+    # Update the knowledge graphs
+    updater.update_shortterm_graph(response_13b)
+    updater.update_longterm_graph(response_7b)

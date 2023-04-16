@@ -1,13 +1,12 @@
+# filesystem.py
 import os
-import threading
-from queue import Queue
-from knowledge_graph_updater import KnowledgeGraphUpdater
-import sys
-import response_generator
-
+from response_generator import ResponseGenerator
+import ResponseGenerator
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-
+model_13b = "ggml-vicuna-13b-1.1-q4_1.bin"
+model_7b = "ggml-vicuna-7b-1.1-q4_0.bin"
+response_generator = ResponseGenerator()
 
 def create_file(filename):
     with open(filename, 'w') as file:
@@ -64,7 +63,7 @@ def navigate_to_directory(auto_vicuna_playground_path):
     else:
         print(f"Directory '{new_directory}' not found.")
 
-def auto_vicuna_workflow(bin_path, model_13b):
+def auto_vicuna_workflow(model_13b_path, model_7b_path):
     purpose_file = "purpose.txt"
 
     if os.path.exists(purpose_file):
@@ -89,61 +88,75 @@ def auto_vicuna_workflow(bin_path, model_13b):
             file.write(f"{name}\n{purpose}\n")
             file.writelines([f"{goal}\n" for goal in goals])
 
-    prompt = f"Given my purpose ('{purpose}'), my 3 goals ({', '.join(goals)}), my short-term memory, and my long-term memory, what goal should I work on next and how?"
-    response = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
-    print(response)
-    knowledge_graph_updater = KnowledgeGraphUpdater(bin_path, model_13b, model_7b)
+    response_generator_13b = ResponseGenerator(model_13b_path)
+    response_generator_7b = ResponseGenerator(model_7b_path)
+    knowledge_graph_updater = KnowledgeGraphUpdater(model_13b_path, model_7b_path)
 
     while True:
-        # Summarize knowledge graphs, goals, and purpose using the 7b model
-        summary_prompt = f"Summarize the following knowledge graphs, goals, and purpose:\n\nKnowledge Graphs:\n{knowledge_graph_updater}\nGoals:\n{', '.join(goals)}\nPurpose:\n{purpose}\n"
-        summary = response_generator.get_response(os.path.join(script_dir, model_7b), prompt)
-        interim = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
-        decision_prompt = "Choose an action for file system operations:\n1. Create a file\n2. Read a file\n3. Update a file\n4. Delete a file\n5. List files and folders\n6. Navigate to a directory\n7. Create new folder\n8. Nevermind"
-        chatbot_decision = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
+        decision_prompt = "Choose an action for file system operations, please pick only a single digit lonely numbered response.\n1. Create a file\n2. Read a file\n3. Update a file\n4. Delete a file\n5. List files and folders\n6. Navigate to a directory\n7. Create new folder\n8. Nevermind"
+        print(f"Decision prompt: {decision_prompt}")
+        chatbot_decision = response_generator_13b.generate_response(decision_prompt)
 
-        choice, *args = chatbot_decision.split()
+        # Wait for a non-empty response that ends with a newline character
+        choice = ''
+        while not choice.strip() or not choice.endswith('\n'):
+            choice = chatbot_decision.strip()
+
+        choice = choice.strip().split()[0]
 
         if choice == '1':
             filename_prompt = "Enter the filename:"
-            filename = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
-            create_file(filename.strip())
+            filename = response_generator_13b.wait_for_response(filename_prompt, '\n').strip()
+            create_file(filename)
         elif choice == '2':
             filename_prompt = "Enter the filename:"
-            filename = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
-            read_file(filename.strip())
+            filename = response_generator_13b.wait_for_response(filename_prompt, '\n').strip()
+            read_file(filename)
         elif choice == '3':
             filename_prompt = "Enter the filename:"
-            filename = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
+            filename = response_generator_13b.wait_for_response(filename_prompt, '\n').strip()
             content_prompt = "Enter the content to update the file:"
-            content = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
-            update_file(filename.strip(), content.strip())
+            content = response_generator_13b.wait_for_response(content_prompt, '\n').strip()
+            update_file(filename, content)
         elif choice == '4':
             filename_prompt = "Enter the filename:"
-            filename = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
-            delete_file(filename.strip())
+            filename = response_generator_13b.wait_for_response(filename_prompt, '\n').strip()
+            delete_file(filename)
         elif choice == '5':
             list_files_and_folders()
         elif choice == '6':
             new_directory_prompt = "Enter the new directory path:"
-            new_directory = response_generator.get_response(os.path.join(script_dir, model_13b), prompt)
-            navigate_to_directory(new_directory.strip())
+            new_directory = response_generator_13b.wait_for_response(new_directory_prompt, '\n').strip()
+            navigate_to_directory(auto_vicuna_playground_path, new_directory)
         elif choice == '7':
             create_new_folder()
-        elif choice == '8':
+        else:
+            print("Passing input to both models...")
+            response_13b = response_generator_13b.generate_response(decision_prompt)
+            print(f"Model 13b:\nInput: {decision_prompt}\nResponse: {response_13b}\n")
+            response_7b = response_generator_7b.generate_response(decision_prompt)
+            print(f"Model 7b:\nInput: {decision_prompt}\nResponse: {response_7b}\n")
+
+        if choice == '8':
             print("Exiting the file system operations.")
             break
-        else:
-            print("Invalid choice. Please try again.")
+
+    # Terminate the processes
+    model_13b_instance.queue.put("stop")
+    model_7b_instance.queue.put("stop")
+    model_13b_instance.process.join()
+    model_7b_instance.process.join()
 
 if __name__ == "__main__":
-    bin_path = os.path.dirname(os.path.abspath(__file__))
-    model_13b = "ggml-vicuna-13b-1.1-q4_1.bin"
-    model_7b = "ggml-vicuna-7b-1.1-q4_0.bin"
+    model_13b_path = "ggml-vicuna-13b-1.1-q4_1.bin"
+    model_7b_path = "ggml-vicuna-7b-1.1-q4_0.bin"
 
-    auto_vicuna_playground = "AutoVicunaPlayground"
-    auto_vicuna_playground_path = os.path.abspath(auto_vicuna_playground)
-    os.makedirs(auto_vicuna_playground_path, exist_ok=True)
-    os.chdir(auto_vicuna_playground_path)
+    # Get ResponseGenerator instances for 13b and 7b models
+    model_13b_instance = response_generator(os.path.join(model_13b_path))
+    model_7b_instance = response_generator(os.path.join(model_7b_path))
 
-    auto_vicuna_workflow(bin_path, model_13b, model_7b)
+    # Send prompts to the models
+    model_13b_instance.get_response("hello, world.")
+    model_7b_instance.get_response("world, hello.")
+
+    auto_vicuna_workflow(model_13b_instance, model_7b_instance)

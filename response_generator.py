@@ -1,46 +1,79 @@
-# response_generator.py
-import multiprocessing
-from queue import Queue
-from llama_cpp import Llama
-
-instances = {}
-queues = {}
-processes = {}
+import queue
+import sys
+import llamacpp
+from pathos.pools import ProcessPool
+import random
 
 
-def get_instance(model_path):
-    if model_path not in instances:
-        instances[model_path] = Llama(model_path=model_path)
-        queues[model_path] = multiprocessing.Queue()
-        processes[model_path] = multiprocessing.Process(target=continuous_model_runner, args=(instances[model_path], queues[model_path], model_path))
-        processes[model_path].daemon = True
-        processes[model_path].start()
-    return instances[model_path], queues[model_path]
+class ResponseGenerator:
+    def __init__(self, model_path):
+        self.model_path = model_path
 
+        self.queue = queue.Queue()
 
-def continuous_model_runner(model_instance, queue, model_path):
-    model_name = model_path.split('/')[-1]
-    if model_name == "ggml-vicuna-7b-1.1-q4_0.bin":
-        print("Short-term mem:")
-    elif model_name == "ggml-vicuna-13b-1.1-q4_1.bin":
-        print("Main attention:")
+        self.process = ProcessPool(processes=1)
+        self.process.apipe(self.continuous_model_runner, self.queue)
 
-    while True:
-        prompt = queue.get()
-        if prompt == "EXIT":
-            break
-        response = generate_response(model_instance, prompt)
-        print(response)
+        self.model = self.initialize_model()
 
-    print("Process terminated.")
+    def initialize_model(self):
+        def progress_callback(progress):
+            pass
 
+        params = llamacpp.InferenceParams.default_with_callback(progress_callback)
+        params.path_model = self.model_path
+        params.seed = random.randint(10000, 99999)
+        params.repeat_penalty = 1.0
+        model = llamacpp.LlamaInference(params)
+        return model
 
-def generate_response(model_instance, prompt):
-    response = model_instance(prompt, max_tokens=100, stop=["\n### Input: ", "\n### Reaction: "], echo=True)
-    return response["choices"][0]["text"]
+    def continuous_model_runner(self, queue):
+        while True:
+            input_text = queue.get()
+            if input_text == "stop":
+                break
+            response = self.generate_response(input_text)
+            print(f"Model: {self.model_path}")
+            print(f"Input: {input_text}")
+            print(f"Response: {response}")
+            print("-" * 40)
 
+    def generate_response(self, prompt):
+        with open("purpose.txt", "r") as file:
+            ai_name = file.readline().strip()
 
-def get_response(model_path, prompt):
-    model_instance, queue = get_instance(model_path)
-    queue.put(prompt)
-    return generate_response(model_instance, prompt)
+        prompt = f"{ai_name}: {prompt}"
+        prompt_tokens = self.model.tokenize(prompt, True)
+        self.model.update_input(prompt_tokens)
+        self.model.ingest_all_pending_input()
+
+        response = ""
+        while True:
+            self.model.eval()
+            token = self.model.sample()
+            text = self.model.token_to_str(token)
+            if text == "\n":
+                break
+            response += text
+
+        return response.strip()
+
+    def wait_for_response(self, prompt, delimiter='\n'):
+        response = ''
+        newline_count = 0
+
+        while newline_count < 2:
+            response += input(prompt + ' ')
+            if response.endswith(delimiter):
+                newline_count += 1
+            prompt = ''
+
+        return response
+
+    def get_response(self, prompt):
+        self.queue.put(prompt)
+        response = self.queue.get()
+        print(f"User: {prompt}")
+        print(f"Generated Response: {response}")
+        print("-" * 40)
+        return response
