@@ -6,6 +6,8 @@ import sys
 from response_generator import ResponseGenerator
 import networkx as nx
 import multiprocessing as mp
+import re
+
 
 # Helper functions
 def count_common_words(page, common_words):
@@ -13,6 +15,7 @@ def count_common_words(page, common_words):
     for word in common_words:
         word_count += page.lower().count(word.lower())
     return word_count
+
 
 def should_skip_page(page, common_words, threshold=0.05):
     total_word_count = len(page.split())
@@ -25,6 +28,7 @@ def should_skip_page(page, common_words, threshold=0.05):
     frequency = common_word_count / total_word_count
     return frequency > threshold
 
+
 def get_most_common_words(text, n=10):
     word_count = {}
     for word in text.split():
@@ -34,6 +38,7 @@ def get_most_common_words(text, n=10):
         else:
             word_count[word] = 1
     return sorted(word_count, key=word_count.get, reverse=True)[:n]
+
 
 def get_common_words(text, n=10):
     word_count = {}
@@ -50,17 +55,35 @@ def get_common_words(text, n=10):
         common_words = [word for word, count in word_count.items() if count >= average_count]
         return sorted(common_words, key=word_count.get, reverse=True)[:n]
 
+
+def generate_summary(model_instance, text, max_lines=20, max_words=335):
+    summary = text
+    while True:
+        summary_lines = summary.split('\n')
+        if len(summary_lines) <= max_lines:
+            if len(summary_lines) == 1 and len(summary.split()) > max_words:
+                summary = model_instance.generate_response(f"Summarize the following text in less than {max_words} words:\n{summary}")
+            else:
+                break
+        else:
+            summary = model_instance.generate_response(f"Summarize the following text in less than {max_lines} lines:\n{summary}")
+    return summary
+
+
 script_dir = os.path.dirname(os.path.abspath(__file__))
+
+
 class KnowledgeGraphUpdater:
     def __init__(self, model_13b_instance, model_7b_instance):
         self.model_13b_instance = model_13b_instance
         self.model_7b_instance = model_7b_instance
-
+        self.chat_history_file = "chat_history.txt"
         self.shortterm_graph = nx.DiGraph()
         self.longterm_graph = nx.DiGraph()
         self.update_interval = 30
         self.daemon = True
-        self.start()
+        #commented out to protect the order of operations
+        #self.start()
 
     def start(self):
         try:
@@ -118,8 +141,16 @@ class KnowledgeGraphUpdater:
         shortterm_graph_path = "shortterm.txt"
         longterm_graph_path = "longterm.txt"
 
-        # Get common words
-        text = activities + insights + general_learnings
+        # Open the chat history file with "a+" mode (create if it doesn't exist and open for reading and appending)
+        with open(self.chat_history_file, "a+") as file:
+            file.seek(0)  # Move the file cursor to the beginning of the file
+            chat_history = file.read()
+
+        # Remove any blank lines
+        chat_history = "\n".join([line for line in chat_history.split('\n') if line.strip()])
+
+        # Include chat_history in the text variable
+        text = activities + insights + general_learnings + chat_history
         common_words = get_common_words(text)
 
         with open(shortterm_graph_path, "a") as file:
@@ -135,6 +166,28 @@ class KnowledgeGraphUpdater:
                 if not should_skip_page(element, common_words):
                     file.write(f"general_learning: {element}\n")
 
+    def write_to_file(self, path, elements):
+        with open(path, "a") as file:
+            for element in elements:
+                file.write(f"{element}\n")
+
+    def update_chat_history(self, new_chat_line):
+        # Read the chat history file, removing any blank lines
+        with open(self.chat_history_file, "r") as file:
+            chat_history = file.read()
+            chat_history = "\n".join([line for line in chat_history.split('\n') if line.strip()])
+
+        # Append the new chat line to the chat history
+        chat_history += f"\n{new_chat_line}"
+
+        # Limit the chat history to the last 20 non-blank lines
+        chat_history_lines = chat_history.split('\n')
+        last_20_lines = chat_history_lines[-20:]
+
+        # Write the updated chat history back to the file
+        with open(self.chat_history_file, "w") as file:
+            file.write("\n".join(last_20_lines))
+
 if __name__ == "__main__":
     model_13b_path = "ggml-vicuna-13b-1.1-q4_1.bin"
     model_7b_path = "ggml-vicuna-7b-1.1-q4_0.bin"
@@ -146,16 +199,5 @@ if __name__ == "__main__":
     # Create the knowledge graph updater instance
     updater = KnowledgeGraphUpdater(model_13b_instance, model_7b_instance)
 
-    # Get response from the 13b model
-    response_13b = model_13b_instance.generate_response(user_input)
-
-    # Get response from the 7b model
-    response_7b = model_7b_instance.generate_response(user_input)
-
-    # Print the responses
-    print("13b:", response_13b)
-    print("7b:", response_7b)
-
-    # Update the knowledge graphs
-    updater.update_shortterm_graph(response_13b)
-    updater.update_longterm_graph(response_7b)
+    # Run the updater once
+    updater.start()

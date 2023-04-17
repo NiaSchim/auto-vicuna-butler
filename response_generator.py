@@ -1,79 +1,89 @@
 import queue
-import sys
 import llamacpp
 from pathos.pools import ProcessPool
 import random
+import threading
+import csv
+import os
+import re
+import subprocess
+import sys
+from multiprocessing import Process, Queue
+os.environ["PYTHONIOENCODING"] = "utf-8"
+import shlex
+import re
 
 
 class ResponseGenerator:
     def __init__(self, model_path):
         self.model_path = model_path
+        self.processes = {}
+        self.ai_name = self.get_ai_name()
+        self.initialize_model()
 
-        self.queue = queue.Queue()
-
-        self.process = ProcessPool(processes=1)
-        self.process.apipe(self.continuous_model_runner, self.queue)
-
-        self.model = self.initialize_model()
+    def get_ai_name(self):
+        try:
+            with open("purpose.txt", "r") as f:
+                return f.readline().strip()
+        except FileNotFoundError:
+            return "me"
 
     def initialize_model(self):
-        def progress_callback(progress):
-            pass
+        # Read the second line of the purpose.txt file
+        try:
+            with open("purpose.txt", "r") as f:
+                f.readline()  # Skip the first line (AI name)
+                initial_prompt = f.readline().strip()  # Read the second line (initial prompt)
+        except FileNotFoundError:
+            initial_prompt = ''
 
-        params = llamacpp.InferenceParams.default_with_callback(progress_callback)
-        params.path_model = self.model_path
-        params.seed = random.randint(10000, 99999)
-        params.repeat_penalty = 1.0
-        model = llamacpp.LlamaInference(params)
-        return model
+        command = [
+            "llamacpp-cli",
+            "-m", self.model_path,
+            "-n", "1",
+            "-t", "8",
+            "--n_predict", "2048",
+            "-c", "2048",
+            "--temp", "0.748",
+            "--top_k", "40",
+            "--top_p", "0.5",
+            "--repeat_last_n", "256",
+            "-b", "1024",
+            "--repeat_penalty", "1.14",
+            "-p", f'"{initial_prompt}"'  # Set the initial prompt
+        ]
+        command_str = " ".join(command)  # Convert the command list to a single string
 
-    def continuous_model_runner(self, queue):
-        while True:
-            input_text = queue.get()
-            if input_text == "stop":
+        print(f"Running command: {command_str}")  # Print the command being run
+        process = subprocess.Popen(
+            command_str, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True
+        )
+        self.processes[self.model_path] = process
+
+        # Wait for the model to initialize and print every line of the output
+        output = process.stdout.readline().decode("utf-8").strip()
+        while output:
+            print(output)
+            if re.match(r".+", output):
                 break
-            response = self.generate_response(input_text)
-            print(f"Model: {self.model_path}")
-            print(f"Input: {input_text}")
-            print(f"Response: {response}")
-            print("-" * 40)
+            output = process.stdout.readline().decode("utf-8").strip()
+
+    def send_input_to_process(self, process, prompt):
+        process.stdin.write(f"{prompt}\n".encode("utf-8"))
+        process.stdin.flush()
 
     def generate_response(self, prompt):
-        with open("purpose.txt", "r") as file:
-            ai_name = file.readline().strip()
+        process = self.processes[self.model_path]
 
-        prompt = f"{ai_name}: {prompt}"
-        prompt_tokens = self.model.tokenize(prompt, True)
-        self.model.update_input(prompt_tokens)
-        self.model.ingest_all_pending_input()
-
-        response = ""
-        while True:
-            self.model.eval()
-            token = self.model.sample()
-            text = self.model.token_to_str(token)
-            if text == "\n":
-                break
-            response += text
-
-        return response.strip()
-
-    def wait_for_response(self, prompt, delimiter='\n'):
-        response = ''
-        newline_count = 0
-
-        while newline_count < 2:
-            response += input(prompt + ' ')
-            if response.endswith(delimiter):
-                newline_count += 1
-            prompt = ''
+        # Send input to the model and get the response
+        self.send_input_to_process(process, prompt)
+        response = process.stdout.readline().decode("utf-8").strip()
 
         return response
 
     def get_response(self, prompt):
-        self.queue.put(prompt)
-        response = self.queue.get()
-        print(f"User: {prompt}")
+        response = self.generate_response(prompt)
+        print(f"You: {prompt}")
         print(f"Generated Response: {response}")
         print("-" * 40)
         return response
