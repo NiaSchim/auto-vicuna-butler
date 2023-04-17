@@ -3,115 +3,79 @@ from bs4 import BeautifulSoup
 import threading
 from queue import Queue
 import os
-from knowledge_graph_updater import KnowledgeGraphUpdater
 import sys
-from response_generator import ResponseGenerator as response_generator
-from response_generator import ResponseGenerator
 import re
 from web_browser_utils import fetch_page_content
-import re
+from knowledge_graph_updater import KnowledgeGraphUpdater
+
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
-def fetch_page_content(url):
-    try:
-        response = requests.get(url)
-        soup = BeautifulSoup(response.content, 'html.parser')
 
-        # Extract visible text
-        visible_text = soup.get_text().strip()
-
-        # Extract image descriptions
-        image_descriptions = []
-        images = soup.find_all('img')
-        for img in images:
-            alt_text = img.get('alt')
-            if alt_text:
-                image_descriptions.append(alt_text.strip())
-
-        # Extract file links
-        file_links = []
-        file_elements = soup.find_all(['a', 'img'])
-        for element in file_elements:
-            href = element.get('href')
-            src = element.get('src')
-            if href and '.' in href.split('/')[-1]:
-                file_links.append(href)
-            elif src and '.' in src.split('/')[-1]:
-                file_links.append(src)
-
-        # Format output as CSV
-        output = f"{visible_text}\n"
-        output += ",".join(image_descriptions) + "\n"
-        output += ",".join(file_links) + "\n"
-        return output
-    except Exception as e:
-        print("Error while fetching page content:", e)
-        return None
-
-def browse_web(model_13b_path, model_7b_path, knowledge_graph_updater_instance):
-    current_url = ""
-    browsing_history = []
-    page_content = ""
+def browse_web(response_generator_big, response_generator_fast, knowledge_graph_updater_instance):
+    default_url = 'https://www.wolframalpha.com/'
+    current_url = default_url
+    browsing_history = [default_url]
+    page_content = fetch_page_content(current_url)
+    page_storage = {default_url: page_content}
     current_page = 0
     content_chunks = []
 
     # Change token_limit as needed
     token_limit = 2048
 
-    # Get ResponseGenerator instances for 13b and 7b models
-    model_13b_instance = ResponseGenerator(os.path.join(model_13b_path))
-    model_7b_instance = ResponseGenerator(os.path.join(model_7b_path))
-
     while True:
+        # Prompt the user to choose an action
         decision_prompt = "Choose an action for web browsing, please pick only a single digit lonely numbered response; 0. Read unsummarized 1. Summarize page 2. Follow hyperlink 3. Enter URL 4. Last page (if applicable) 5. Next page (if applicable) 6. Exit browsing session\n"
-        print(f"Decision prompt: {decision_prompt}")
         decision_prompt_utf8 = decision_prompt.encode("utf-8").decode("utf-8")
-        chatbot_decision = ResponseGenerator(model_13b_path).generate_response(decision_prompt_utf8)
+        chatbot_decision = response_generator_big.generate_response(decision_prompt_utf8)
 
         # Extract the first numeric digit from the response as the answer
-        answer = re.search('\d', chatbot_decision).group()
-        print(f"Answer: {answer}")
-
-        # Move on to the next code
+        answer_match = re.search('\d', chatbot_decision)
+        if answer_match is None:
+            # If no digit is found, prompt the user to enter a valid number between 0 and 6
+            print("Sorry, I didn't understand your choice. Please enter a number between 0 and 6.")
+            continue
+        answer = answer_match.group()
+        # Convert the answer to an integer and check if it's between 0 and 6
         choice = int(answer)
-        while not choice:
-            user_input = input(chatbot_decision)
-            try:
-                choice = int(user_input)
-            except ValueError:
-                print("Sorry invalid response, try again.")
-                continue
+        if choice < 0 or choice > 6:
+            # If the choice is not between 0 and 6, prompt the user to enter a valid number
+            print("Please enter a number between 0 and 6.")
+            continue
+        # If the choice is valid, execute the corresponding action
+        print(f"Selected choice: {choice}")  # Print the selected choice
 
-            if choice < 0 or choice > 6:
-                print("Sorry invalid response, try again.")
-                choice = None
-
-        # Prompt the AI based on the user's choice
+        # Prompt the AI
         if choice == 0:
-            print(content_chunks[current_page])
+            print("Unsummarized content:")
+            if current_page >= 0 and current_page < len(content_chunks):
+                print(content_chunks[current_page])
+            else:
+                print("Invalid page number")
         elif choice == 1:
             prompt = "Summarize the current page."
-            summary = model_7b_instance.generate_response(prompt)
+            print("Content to summarize:")
+            print(visible_text)
+            summary = response_generator_fast.generate_response(prompt)
             print(f"Model 7b:\nInput: {prompt}\nResponse: {summary}\n")
         elif choice == 2:
             hyperlink_prompt = "Enter the hyperlink:"
-            hyperlink = input(f"{hyperlink_prompt}\n>>> ").strip()
+            hyperlink = response_generator_fast.generate_response(hyperlink_prompt).strip()
             current_url = hyperlink
-            page_content = fetch_page_content(current_url)
-            visible_text, image_descriptions, file_links = page_content.strip().split("\n")
-            content_chunks = split_content_into_chunks(visible_text, token_limit)
-            current_page = 0
-            browsing_history.append(current_url)
         elif choice == 3:
-            url_prompt = "Enter the URL:"
-            url = input(f"{url_prompt}\n>>> ").strip()
-            current_url = hyperlink
-            page_content = fetch_page_content(current_url)
-            visible_text, image_descriptions, file_links = page_content.strip().split("\n")
-            content_chunks = split_content_into_chunks(visible_text, token_limit)
-            current_page = 0
-            browsing_history.append(current_url)
+            url_prompt = "Please enter the URL."
+            while True:
+                url = response_generator_fast.generate_response(url_prompt).strip()
+                if not url:
+                    continue  # Skip empty URLs
+                try:
+                    requests.get(url)  # Validate the URL
+                    break  # If the URL is valid, exit the loop
+                except:
+                    print("Invalid URL. Please try again.")
+                    response_generator_fast.generate_response("Invalid URL. Please try again.")
+            current_url = url
         elif choice == 4:
             if current_page > 0:
                 current_page -= 1
@@ -126,13 +90,7 @@ def browse_web(model_13b_path, model_7b_path, knowledge_graph_updater_instance):
             break
 
         print("Exiting the loop to update the knowledge graph...")
-        response_13b = model_13b_instance.generate_response(decision_prompt)
-        print(f"Model 13b:\nInput: {decision_prompt}\nResponse: {response_13b}\n")
-        response_7b = model_7b_instance.generate_response(decision_prompt)
-        print(f"Model 7b:\nInput: {decision_prompt}\nResponse: {response_7b}\n")
-
-        # Call the update_knowledge_graphs method of the KnowledgeGraphUpdater instance
-        knowledge_graph_updater_instance.update_knowledge_graphs(response_13b, response_7b)
+        knowledge_graph_updater_instance.summarize_and_store(visible_text) if choice == 1 else knowledge_graph_updater_instance.start()  # Update the knowledge graph
 
 def split_content_into_chunks(content, token_limit):
     tokens = content.split()
@@ -147,15 +105,6 @@ def split_content_into_chunks(content, token_limit):
     return chunks
 
 if __name__ == "__main__":
-    model_13b_path = "ggml-vicuna-13b-1.1-q4_1.bin"
-    model_7b_path = "ggml-vicuna-7b-1.1-q4_0.bin"
 
-    # Create instances of the ResponseGenerator class
-    chatbot_13b = response_generator(os.path.join(script_dir, model_13b_path))
-    chatbot_7b = response_generator(os.path.join(script_dir, model_7b_path))
-
-    # Create the KnowledgeGraphUpdater instance and pass the chatbot models to it
-    knowledge_graph_updater_instance = KnowledgeGraphUpdater(chatbot_13b, chatbot_7b)
-
-    # Call the browse_web function with the KnowledgeGraphUpdater instance
-    browse_web(chatbot_13b, chatbot_7b, knowledge_graph_updater_instance)
+    # Call the browse_web function with the KnowledgeGraphUpdater instance and ResponseGenerator instance
+    browse_web(response_generator_big, response_generator_fast, knowledge_graph_updater_instance)

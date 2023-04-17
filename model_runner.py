@@ -2,10 +2,10 @@ from llama import Llama
 from multiprocessing import Process, Queue
 import sys
 import time
-from response_generator import ResponseGenerator
 
 
-def model_runner(model_path):
+def model_runner(model_path, response_generator):
+    ResponseGenerator = response_generator
     model_instance = ResponseGenerator(model_path)
     while True:
         input_text = queue.get()

@@ -3,10 +3,9 @@ import threading
 import time
 from xml.etree import ElementTree as ET
 import sys
-from response_generator import ResponseGenerator
 import networkx as nx
-import multiprocessing as mp
 import re
+from pathos.pools import ProcessPool
 
 
 # Helper functions
@@ -56,7 +55,7 @@ def get_common_words(text, n=10):
         return sorted(common_words, key=word_count.get, reverse=True)[:n]
 
 
-def generate_summary(model_instance, text, max_lines=20, max_words=335):
+def generate_summary(model_instance, text, max_lines=5, max_words=80):
     summary = text
     while True:
         summary_lines = summary.split('\n')
@@ -74,25 +73,18 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 
 
 class KnowledgeGraphUpdater:
-    def __init__(self, model_13b_instance, model_7b_instance):
-        self.model_13b_instance = model_13b_instance
-        self.model_7b_instance = model_7b_instance
+    def __init__(self, response_generator_big, response_generator_fast):
+        self.response_generator_big = response_generator_big
+        self.response_generator_fast = response_generator_fast
         self.chat_history_file = "chat_history.txt"
-        self.shortterm_graph = nx.DiGraph()
-        self.longterm_graph = nx.DiGraph()
         self.update_interval = 30
         self.daemon = True
-        #commented out to protect the order of operations
-        #self.start()
+        self.process_pool = ProcessPool(processes=1)
+        self.process_pool.apipe(self.start)
+
 
     def start(self):
-        try:
-            mp.set_start_method('spawn')
-        except RuntimeError:
-            pass
-
         purpose_file = "purpose.txt"
-
         if os.path.exists(purpose_file):
             with open(purpose_file, "r") as file:
                 lines = file.readlines()
@@ -116,26 +108,26 @@ class KnowledgeGraphUpdater:
                 file.writelines([f"{goal}\n" for goal in goals])
 
         prompt = f"Given my purpose ('{purpose}'), my 3 goals ({', '.join(goals)}), my short-term memory, and my long-term memory, what goal should I work on next and how?"
-        response = self.model_13b_instance.generate_response(prompt)
+        response = self.response_generator_big.generate_response(prompt)
         print(response)
 
         # Summarize knowledge graphs, goals, and purpose using the 7b model
-        summary_prompt = f"Summarize the following knowledge graphs, goals, and purpose:\n\nKnowledge Graphs:\nShort-term: {self.shortterm_graph}\nLong-term: {self.longterm_graph}\n\nGoals: {', '.join(goals)}\n\nPurpose: {purpose}\n"
-        summary = self.model_7b_instance.generate_response(summary_prompt)
+        summary_prompt = f"Summarize the following knowledge graphs, goals, and purpose:\n\nGoals: {', '.join(goals)}\n\nPurpose: {purpose}\n"
+        summary = self.response_generator_fast.generate_response(summary_prompt)
         print(summary)
 
         time.sleep(self.update_interval)
 
         activities_prompt = "What are you doing?\n"
-        activities = self.model_13b_instance.generate_response(activities_prompt)
+        activities = self.response_generator_big.generate_response(activities_prompt)
         print(f"Model 13b:\nInput: {activities_prompt}\nResponse: {activities}\n")
 
         insights_prompt = "What have you learned about what you're doing?\n"
-        insights = self.model_13b_instance.generate_response(insights_prompt)
+        insights = self.response_generator_big.generate_response(insights_prompt)
         print(f"Model 13b:\nInput: {insights_prompt}\nResponse: {insights}\n")
 
         general_learnings_prompt = "What have you learned in general?\n"
-        general_learnings = self.model_13b_instance.generate_response(general_learnings_prompt)
+        general_learnings = self.response_generator_big.generate_response(general_learnings_prompt)
         print(f"Model 13b:\nInput: {general_learnings_prompt}\nResponse: {general_learnings}\n")
 
         shortterm_graph_path = "shortterm.txt"
@@ -153,18 +145,15 @@ class KnowledgeGraphUpdater:
         text = activities + insights + general_learnings + chat_history
         common_words = get_common_words(text)
 
-        with open(shortterm_graph_path, "a") as file:
-            for activity in activities:
-                if not should_skip_page(activity, common_words):
-                    file.write(f"activity: {activity}\n")
-            for insight in insights:
-                if not should_skip_page(insight, common_words):
-                    file.write(f"insight: {insight}\n")
+        # Write activities and insights to the shortterm_graph_path
+        self.write_to_file(shortterm_graph_path, [f"activity: {activity}" for activity in activities if not should_skip_page(activity, common_words)])
+        self.write_to_file(shortterm_graph_path, [f"insight: {insight}" for insight in insights if not should_skip_page(insight, common_words)])
 
-        with open(longterm_graph_path, "a") as file:
-            for element in general_learnings:
-                if not should_skip_page(element, common_words):
-                    file.write(f"general_learning: {element}\n")
+        # Write general_learnings to the longterm_graph_path
+        self.write_to_file(longterm_graph_path, [f"general_learning: {element}" for element in general_learnings if not should_skip_page(element, common_words)])
+
+        # Summarize and store the short-term and long-term summaries
+        self.summarize_and_store(text)
 
     def write_to_file(self, path, elements):
         with open(path, "a") as file:
@@ -180,24 +169,33 @@ class KnowledgeGraphUpdater:
         # Append the new chat line to the chat history
         chat_history += f"\n{new_chat_line}"
 
-        # Limit the chat history to the last 20 non-blank lines
+        # Limit the chat history to the last 5 non-blank lines
         chat_history_lines = chat_history.split('\n')
-        last_20_lines = chat_history_lines[-20:]
+        last_5_lines = chat_history_lines[-5:]
 
         # Write the updated chat history back to the file
         with open(self.chat_history_file, "w") as file:
-            file.write("\n".join(last_20_lines))
+            file.write("\n".join(last_5_lines))
+
+    def summarize_and_store(self, text):
+        shortterm_summary = generate_summary(self.response_generator_fast, text)
+        longterm_summary = generate_summary(self.response_generator_fast, text)
+
+        while len(shortterm_summary) > 80:
+            shortterm_summary = generate_summary(self.response_generator_fast, shortterm_summary)
+
+        while len(longterm_summary) > 80:
+            longterm_summary = generate_summary(self.response_generator_fast, longterm_summary)
+
+        with open(shortterm_filename, "w") as shortterm_file:
+            shortterm_file.write(shortterm_summary)
+
+        with open(longterm_filename, "w") as longterm_file:
+            longterm_file.write(longterm_summary)
 
 if __name__ == "__main__":
-    model_13b_path = "ggml-vicuna-13b-1.1-q4_1.bin"
-    model_7b_path = "ggml-vicuna-7b-1.1-q4_0.bin"
-
-    # Get ResponseGenerator instances for 13b and 7b models
-    model_13b_instance = ResponseGenerator(os.path.join(script_dir, model_13b_path))
-    model_7b_instance = ResponseGenerator(os.path.join(script_dir, model_7b_path))
-
     # Create the knowledge graph updater instance
-    updater = KnowledgeGraphUpdater(model_13b_instance, model_7b_instance)
+    KnowledgeGraphUpdater(response_generator_big, response_generator_fast)
 
     # Run the updater once
     updater.start()
