@@ -59,7 +59,7 @@ def navigate_to_directory(auto_vicuna_playground_path):
     else:
         print(f"Directory '{new_directory}' not found.")
 
-def auto_vicuna_workflow(response_generator_big, response_generator_fast):
+def auto_vicuna_workflow(response_generator_big, response_generator_fast, knowledge_graph_updater_instance):
     purpose_file = "purpose.txt"
 
     if os.path.exists(purpose_file):
@@ -122,14 +122,14 @@ def auto_vicuna_workflow(response_generator_big, response_generator_fast):
             elif choice == '3':
                 print(f"Selected choice: {choice}")  # Print the selected choice
                 filename_prompt = "Enter the filename:"
-                filename = response_generator_big.wait_for_response(filename_prompt, '\n').strip()
+                filename = response_generator_big.generate_response(filename_prompt, '\n').strip()
                 content_prompt = "Enter the content to update the file:"
-                content = response_generator_big.wait_for_response(content_prompt, '\n').strip()
+                content = response_generator_big.generate_response(content_prompt, '\n').strip()
                 update_file(filename, content)
             elif choice == '4':
                 print(f"Selected choice: {choice}")  # Print the selected choice
                 filename_prompt = "Enter the filename:"
-                filename = response_generator_big.wait_for_response(filename_prompt, '\n').strip()
+                filename = response_generator_big.generate_response(filename_prompt, '\n').strip()
                 delete_file(filename)
             elif choice == '5':
                 print(f"Selected choice: {choice}")  # Print the selected choice
@@ -137,7 +137,7 @@ def auto_vicuna_workflow(response_generator_big, response_generator_fast):
             elif choice == '6':
                 print(f"Selected choice: {choice}")  # Print the selected choice
                 new_directory_prompt = "Enter the new directory path:"
-                new_directory = response_generator_big.wait_for_response(new_directory_prompt, '\n').strip()
+                new_directory = response_generator_big.generate_response(new_directory_prompt, '\n').strip()
                 navigate_to_directory(auto_vicuna_playground_path, new_directory)
             elif choice == '7':
                 create_new_folder()
@@ -146,8 +146,4 @@ def auto_vicuna_workflow(response_generator_big, response_generator_fast):
                 print(f"Selected choice: {choice}")  # Print the selected choice
                 print("Exiting the file system operations.")
                 break
-            knowledge_graph_updater_instance.start()
-
-# Run the auto_vicuna_workflow function
-if __name__ == "__main__":
-    auto_vicuna_workflow(response_generator_big, response_generator_fast)
+            knowledge_graph_updater_instance.summarize_and_store()

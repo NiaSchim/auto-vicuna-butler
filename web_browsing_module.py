@@ -24,6 +24,11 @@ def browse_web(response_generator_big, response_generator_fast, knowledge_graph_
     # Change token_limit as needed
     token_limit = 2048
 
+    def extract_links(content):
+        soup = BeautifulSoup(content, 'html.parser')
+        links = [link.get('href') for link in soup.find_all('a')]
+        return links
+
     while True:
         # Prompt the user to choose an action
         decision_prompt = "Choose an action for web browsing, please pick only a single digit lonely numbered response; 0. Read unsummarized 1. Summarize page 2. Follow hyperlink 3. Enter URL 4. Last page (if applicable) 5. Next page (if applicable) 6. Exit browsing session\n"
@@ -56,26 +61,60 @@ def browse_web(response_generator_big, response_generator_fast, knowledge_graph_
         elif choice == 1:
             prompt = "Summarize the current page."
             print("Content to summarize:")
-            print(visible_text)
+            print(page_content)
             summary = response_generator_fast.generate_response(prompt)
             print(f"Model 7b:\nInput: {prompt}\nResponse: {summary}\n")
         elif choice == 2:
+            # Display all hyperlinks in the current page content as a list
+            hyperlinks = extract_links(page_content)
+            print("Available hyperlinks:")
+            for i, link in enumerate(hyperlinks):
+                print(f"{i+1}. {link}")
+
             hyperlink_prompt = "Enter the hyperlink:"
             hyperlink = response_generator_fast.generate_response(hyperlink_prompt).strip()
-            current_url = hyperlink
+
+            # Set the new current webpage to the web address of the first valid URL found in the AI's response
+            url_match = re.search(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', hyperlink)
+            if url_match:
+                new_url = url_match.group()
+                try:
+                    new_page_content = fetch_page_content(new_url)
+                    current_url = new_url
+                    page_content = new_page_content
+                    browsing_history.append(current_url)
+                    page_storage[current_url] = page_content
+                except Exception as e:
+                    print(f"Error fetching the new page: {e}")
+                    print("Reverting to the last valid webpage.")
+            else:
+                print("No valid URL found in the AI's response. Reverting to the last valid webpage.")
         elif choice == 3:
             url_prompt = "Please enter the URL."
-            while True:
+            invalid_attempts = 0
+            while invalid_attempts < 3:
                 url = response_generator_fast.generate_response(url_prompt).strip()
                 if not url:
                     continue  # Skip empty URLs
-                try:
-                    requests.get(url)  # Validate the URL
-                    break  # If the URL is valid, exit the loop
-                except:
+                url_match = re.search(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', url)
+                if url_match:
+                    valid_url = url_match.group()
+                    try:
+                        new_page_content = fetch_page_content(valid_url)
+                        current_url = valid_url
+                        page_content = new_page_content
+                        browsing_history.append(current_url)
+                        page_storage[current_url] = page_content
+                        break  # If the URL is valid, exit the loop
+                    except Exception as e:
+                        print(f"Error fetching the new page: {e}")
+                        print("Please try again.")
+                        invalid_attempts += 1
+                else:
                     print("Invalid URL. Please try again.")
-                    response_generator_fast.generate_response("Invalid URL. Please try again.")
-            current_url = url
+                    invalid_attempts += 1
+            if invalid_attempts == 3:
+                print("Reached maximum invalid URL attempts. Reverting to the last valid webpage.")
         elif choice == 4:
             if current_page > 0:
                 current_page -= 1
@@ -90,7 +129,7 @@ def browse_web(response_generator_big, response_generator_fast, knowledge_graph_
             break
 
         print("Exiting the loop to update the knowledge graph...")
-        knowledge_graph_updater_instance.summarize_and_store(visible_text) if choice == 1 else knowledge_graph_updater_instance.start()  # Update the knowledge graph
+        knowledge_graph_updater_instance.summarize_and_store(page_content) if choice == 1 else knowledge_graph_updater_instance.start()  # Update the knowledge graph
 
 def split_content_into_chunks(content, token_limit):
     tokens = content.split()
@@ -104,7 +143,5 @@ def split_content_into_chunks(content, token_limit):
 
     return chunks
 
-if __name__ == "__main__":
-
-    # Call the browse_web function with the KnowledgeGraphUpdater instance and ResponseGenerator instance
+def web_browsing_workflow(response_generator_big, response_generator_fast, knowledge_graph_updater_instance):
     browse_web(response_generator_big, response_generator_fast, knowledge_graph_updater_instance)
